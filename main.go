@@ -83,12 +83,12 @@ func handleConnection(conn net.Conn) (error) {
     // step 3: parse body
     var body io.Reader 
     if contentLengthValues, ok := headers["Content-Length"]; ok && len(contentLengthValues) > 0 {
-        _, err := strconv.Atoi(contentLengthValues[0])
+        contentLength, err := strconv.Atoi(contentLengthValues[0])
         if err != nil {
             return fmt.Errorf("invalid content-length: %v", err)
         }
 
-        body = reader
+        body = io.LimitReader(reader, int64(contentLength))
     }
 
     request := &HTTPRequestFormat{
@@ -102,17 +102,15 @@ func handleConnection(conn net.Conn) (error) {
     responseStruct := &HTTPResponseFormat{
         Protocol: request.Protocol,
         Status: "200 OK",
-        Headers: request.Headers,
+        Headers: make(map[string][]string),
         Body: request.Body,
     }
 
     responseStr, err := createResponse(responseStruct)
-    fmt.Printf("responseStr: %v", responseStr)
     if err != nil {
 		fmt.Printf("error building response", err)
     }
-    // Send a simple HTTP response
-	// response := "HTTP/1.1 200 OK\r\nContent-Length: 13\r\n\r\nHello, World!"
+
 	_, err = conn.Write([]byte(responseStr))
 	if err != nil {
 		fmt.Printf("Error writing response: %v\n", err)
@@ -126,6 +124,15 @@ func createResponse(response *HTTPResponseFormat) (string, error) {
 
     sb.WriteString(response.Protocol + " " + response.Status + "\r\n")
 
+    // attach all headers, content length to be dealt with later
+    // as part of dealing with the body itself.
+    for key, values := range response.Headers {
+        for _, value := range values {
+            sb.WriteString(key + ": " + value + "\r\n")
+        }
+    }
+
+    // determine length, attach that header, also attach the body itself
     contentLength := 0
     if response.Body != nil {
         bodyBytes, err := io.ReadAll(response.Body)
@@ -140,12 +147,6 @@ func createResponse(response *HTTPResponseFormat) (string, error) {
     } else {
         // no body, so double newline after headers
         sb.WriteString("\r\n")
-    }
-
-    for key, values := range response.Headers {
-        for _, value := range values {
-            sb.WriteString(key + ": " + value + "\r\n")
-        }
     }
 
     st := sb.String()
